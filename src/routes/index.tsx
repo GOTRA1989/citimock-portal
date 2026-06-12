@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -32,13 +31,38 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { ShieldAlert, AlertTriangle, Banknote, FileWarning, Lock, Download, ExternalLink, Building2 } from "lucide-react";
+import {
+  ShieldAlert,
+  AlertTriangle,
+  Banknote,
+  FileWarning,
+  Lock,
+  Download,
+  ExternalLink,
+  Building2,
+  LayoutDashboard,
+  Users,
+  ScrollText,
+  Gauge,
+  Settings,
+  Activity,
+  ArrowRight,
+  CheckCircle2,
+  Circle,
+  TrendingUp,
+  Globe2,
+  FileText,
+} from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "CitiMock Global Portal — AML Transaction Monitoring" },
-      { name: "description", content: "Institutional core banking AML simulation: KYC ingestion, transaction ledger, structuring/layering/integration alerts, and STR/SAR filing." },
+      {
+        name: "description",
+        content:
+          "Institutional core banking AML simulation: KYC ingestion, transaction ledger, structuring/layering/integration alerts, and STR/SAR filing.",
+      },
     ],
   }),
   component: Portal,
@@ -104,6 +128,7 @@ function Portal() {
   const [caseEvents, setCaseEvents] = useState<CaseEvent[]>([]);
   const [strOpen, setStrOpen] = useState(false);
   const [strContext, setStrContext] = useState<{ tx?: Transaction; customer?: Customer } | null>(null);
+  const [navKey, setNavKey] = useState<string>("dashboard");
 
   // Form state
   const [amount, setAmount] = useState("");
@@ -111,7 +136,7 @@ function Portal() {
   const [txStatus, setTxStatus] = useState<TxStatus>("Completed");
   const [description, setDescription] = useState("");
 
-  // Ingest from URL parameters (Web 1 -> Web 2)
+  // Ingest from URL parameters
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -157,6 +182,13 @@ function Portal() {
     [caseEvents, activeCustomerId],
   );
 
+  const stats = useMemo(() => {
+    const flagged = transactions.filter((t) => t.status === "Flagged").length;
+    const volume = transactions.reduce((s, t) => s + t.amount, 0);
+    const highRiskAccts = customers.filter((c) => c.riskRating === "High").length;
+    return { flagged, volume, highRiskAccts, total: transactions.length };
+  }, [transactions, customers]);
+
   function evaluateAlerts(newTx: Transaction, allForCustomer: Transaction[]): AlertStage | undefined {
     const customer = customers.find((c) => c.id === newTx.customerId);
     if (!customer) return;
@@ -164,37 +196,27 @@ function Portal() {
     const prior = allForCustomer.filter((t) => t.id !== newTx.id);
     const priorStages = caseEvents.filter((e) => e.customerId === newTx.customerId).map((e) => e.stage);
 
-    // INTEGRATION
     if (newTx.type === "Incoming Transfer") {
       const desc = (newTx.description || "").toLowerCase();
       const matchedKw = INTEGRATION_KEYWORDS.some((k) => desc.includes(k));
-      if (matchedKw && priorStages.includes("LAYERING")) {
-        return "INTEGRATION";
-      }
+      if (matchedKw && priorStages.includes("LAYERING")) return "INTEGRATION";
     }
 
-    // LAYERING — high-value wire to foreign/high-risk country after PLACEMENT
     if (
       newTx.type === "Wire Transfer" &&
       newTx.amount > 20000 &&
       priorStages.includes("PLACEMENT") &&
       HIGH_RISK_COUNTRIES.includes(customer.country)
-    ) {
-      return "LAYERING";
-    }
-    // also trigger if customer's country isn't high-risk but it's still foreign (non-US)
+    ) return "LAYERING";
+
     if (
       newTx.type === "Wire Transfer" &&
       newTx.amount > 20000 &&
       priorStages.includes("PLACEMENT") &&
       customer.country !== "United States"
-    ) {
-      return "LAYERING";
-    }
+    ) return "LAYERING";
 
-    // PLACEMENT — sequential cash deposits accumulating > $10k
     if (newTx.type === "Cash Deposit") {
-      // walk backward through prior txs collecting consecutive cash deposits
       const seq: Transaction[] = [newTx];
       for (let i = prior.length - 1; i >= 0; i--) {
         if (prior[i].type === "Cash Deposit") seq.push(prior[i]);
@@ -205,10 +227,10 @@ function Portal() {
     }
   }
 
-  function addTransaction() {
+  function addTransaction(preset?: { amount?: number; type?: TxType; status?: TxStatus; description?: string }) {
     if (!activeCustomer) return toast.error("No active customer");
     if (activeCustomer.locked) return toast.error("Account is locked — SAR filed");
-    const amt = parseFloat(amount);
+    const amt = preset?.amount ?? parseFloat(amount);
     if (!amt || amt <= 0) return toast.error("Enter a valid amount");
 
     const tx: Transaction = {
@@ -218,9 +240,9 @@ function Portal() {
       customerName: activeCustomer.name,
       customerCountry: activeCustomer.country,
       amount: amt,
-      type: txType,
-      status: txStatus,
-      description: description || undefined,
+      type: preset?.type ?? txType,
+      status: preset?.status ?? txStatus,
+      description: preset?.description ?? (description || undefined),
     };
 
     const updatedAll = [...transactions, tx];
@@ -244,8 +266,10 @@ function Portal() {
     }
 
     setTransactions(updatedAll);
-    setAmount("");
-    setDescription("");
+    if (!preset) {
+      setAmount("");
+      setDescription("");
+    }
   }
 
   function openInvestigate(tx: Transaction) {
@@ -263,82 +287,155 @@ function Portal() {
 
   const stageOrder: AlertStage[] = ["PLACEMENT", "LAYERING", "INTEGRATION"];
 
-  return (
-    <div className="min-h-screen bg-background text-foreground">
-      <Toaster position="top-right" richColors closeButton />
+  const navItems = [
+    { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { key: "customers", label: "Customers", icon: Users },
+    { key: "ledger", label: "Ledger", icon: ScrollText },
+    { key: "alerts", label: "Alerts", icon: ShieldAlert },
+    { key: "reports", label: "STR / SAR", icon: FileText },
+    { key: "monitor", label: "Live Monitor", icon: Activity },
+    { key: "settings", label: "Settings", icon: Settings },
+  ];
 
-      {/* Header */}
-      <header className="border-b bg-card">
-        <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="size-10 rounded-md bg-primary text-primary-foreground flex items-center justify-center">
-              <Building2 className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">CitiMock Global Portal</h1>
-              <p className="text-xs text-muted-foreground">Institutional Core Banking • AML Transaction Monitoring</p>
-            </div>
+  return (
+    <div className="min-h-screen flex w-full bg-background text-foreground">
+      <Toaster position="top-right" richColors closeButton theme="light" />
+
+      {/* SIDEBAR */}
+      <aside className="hidden md:flex w-64 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
+        <div className="px-5 py-5 flex items-center gap-3 border-b border-sidebar-border">
+          <div className="size-10 rounded-lg bg-gradient-to-br from-sidebar-primary to-[color-mix(in_oklab,var(--sidebar-primary)_60%,white)] flex items-center justify-center shadow-lg shadow-sidebar-primary/30">
+            <Building2 className="size-5 text-sidebar-primary-foreground" />
           </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="outline" className="gap-1">
-              <ShieldAlert className="size-3" /> Compliance Unit
-            </Badge>
-            <Badge variant="secondary">FinCEN / FATF Aligned</Badge>
+          <div>
+            <div className="text-sm font-bold tracking-tight">CitiMock</div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-sidebar-foreground/60">Global Portal</div>
           </div>
         </div>
-      </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-6 space-y-6">
-        {/* Active customer + form */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Card className="lg:col-span-1">
-            <CardHeader>
-              <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Active Customer</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
+        <nav className="flex-1 px-3 py-4 space-y-0.5">
+          <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-sidebar-foreground/45">
+            Compliance Suite
+          </div>
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = navKey === item.key;
+            return (
+              <button
+                key={item.key}
+                onClick={() => setNavKey(item.key)}
+                className={`group w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all cursor-pointer ${
+                  active
+                    ? "bg-sidebar-primary/15 text-sidebar-foreground shadow-[inset_2px_0_0_0_var(--sidebar-primary)] pl-[10px]"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground hover:translate-x-0.5"
+                }`}
+              >
+                <Icon className={`size-4 transition-transform ${active ? "text-sidebar-primary" : "group-hover:scale-110"}`} />
+                <span>{item.label}</span>
+                {active && <span className="ml-auto size-1.5 rounded-full bg-sidebar-primary shadow-[0_0_8px_var(--sidebar-primary)]" />}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="px-4 py-4 border-t border-sidebar-border">
+          <div className="flex items-center gap-3">
+            <div className="size-9 rounded-full bg-sidebar-accent flex items-center justify-center text-xs font-semibold">CU</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold truncate">Compliance Unit</div>
+              <div className="text-[10px] text-sidebar-foreground/60 truncate">FinCEN / FATF Aligned</div>
+            </div>
+            <div className="size-2 rounded-full bg-emerald-ok shadow-[0_0_8px_var(--emerald-ok)]" />
+          </div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* TOP BAR */}
+        <header className="h-16 border-b border-border bg-card/60 backdrop-blur-md flex items-center px-6 gap-4 sticky top-0 z-30">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">AML Transaction Monitoring</div>
+            <h1 className="text-base font-semibold tracking-tight">Tier-1 Compliance Workspace</h1>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Badge variant="outline" className="gap-1.5 font-mono text-[10px] tracking-wider border-emerald-ok/40 text-emerald-ok bg-emerald-ok/5">
+              <span className="size-1.5 rounded-full bg-emerald-ok animate-pulse" /> LIVE FEED
+            </Badge>
+            <Badge variant="outline" className="font-mono text-[10px]">SESSION: {new Date().toLocaleDateString()}</Badge>
+          </div>
+        </header>
+
+        <main className="flex-1 p-4 md:p-6 space-y-6">
+          {/* KPI STRIP */}
+          <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <KpiCard label="Total Transactions" value={stats.total.toString()} icon={ScrollText} accent="navy" />
+            <KpiCard label="Flagged Activity" value={stats.flagged.toString()} icon={AlertTriangle} accent="red" />
+            <KpiCard label="High-Risk Accounts" value={stats.highRiskAccts.toString()} icon={ShieldAlert} accent="amber" />
+            <KpiCard label="Monitored Volume" value={fmtMoney(stats.volume)} icon={TrendingUp} accent="gold" />
+          </section>
+
+          {/* CUSTOMER + COMMAND CENTER */}
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Customer profile */}
+            <div className="executive-card p-6 xl:col-span-1">
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-muted-foreground">Active Customer</div>
+                <Gauge className="size-4 text-muted-foreground" />
+              </div>
               <Select value={activeCustomerId} onValueChange={setActiveCustomerId}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger className="bg-secondary/40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {customers.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name} — {c.country}
-                    </SelectItem>
+                    <SelectItem key={c.id} value={c.id}>{c.name} — {c.country}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+
               {activeCustomer && (
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">{activeCustomer.accountNumber}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Country</span><span>{activeCustomer.country}</span></div>
-                  <div className="flex justify-between items-center"><span className="text-muted-foreground">Risk Rating</span>
-                    <Badge variant={activeCustomer.riskRating === "High" ? "destructive" : activeCustomer.riskRating === "Medium" ? "default" : "secondary"}>
-                      {activeCustomer.riskRating}
-                    </Badge>
-                  </div>
-                  {activeCustomer.locked && (
-                    <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-destructive text-xs font-medium">
-                      <Lock className="size-3" /> Account locked — SAR filed
+                <div className="mt-5 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="size-12 rounded-full bg-gradient-to-br from-navy to-primary text-navy-foreground flex items-center justify-center font-bold text-base">
+                      {activeCustomer.name.split(" ").map(n => n[0]).join("").slice(0,2)}
                     </div>
-                  )}
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm truncate">{activeCustomer.name}</div>
+                      <div className="text-[11px] text-muted-foreground flex items-center gap-1"><Globe2 className="size-3" /> {activeCustomer.country}</div>
+                    </div>
+                  </div>
+                  <Separator />
+                  <Row label="Account No." value={<span className="font-mono text-xs">{activeCustomer.accountNumber}</span>} />
+                  <Row label="Risk Rating" value={<RiskBadge risk={activeCustomer.riskRating} />} />
+                  <Row label="Status" value={
+                    activeCustomer.locked ? (
+                      <Badge variant="outline" className="alert-glow-red gap-1 font-semibold"><Lock className="size-3" /> LOCKED</Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-emerald-ok/40 text-emerald-ok bg-emerald-ok/5 gap-1"><CheckCircle2 className="size-3" /> Active</Badge>
+                    )
+                  } />
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
 
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-2">
-                <Banknote className="size-4" /> Post Transaction
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            {/* Simulation Command Center */}
+            <div className="executive-card p-6 xl:col-span-2 relative overflow-hidden">
+              <div className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_top_right,var(--primary),transparent_60%)]" />
+              <div className="flex items-center justify-between mb-4 relative">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-muted-foreground">Simulation Command Center</div>
+                  <div className="text-sm font-semibold mt-0.5">Post & Trigger Test Transactions</div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px] gap-1"><Activity className="size-3" /> SANDBOX</Badge>
+              </div>
+
+              {/* Manual posting */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 relative">
                 <div className="space-y-1.5">
-                  <Label>Amount ($)</Label>
-                  <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+                  <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">Amount (USD)</Label>
+                  <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="font-mono" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Transaction Type</Label>
+                  <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">Type</Label>
                   <Select value={txType} onValueChange={(v) => setTxType(v as TxType)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -350,7 +447,7 @@ function Portal() {
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Status</Label>
+                  <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">Status</Label>
                   <Select value={txStatus} onValueChange={(v) => setTxStatus(v as TxStatus)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -360,157 +457,173 @@ function Portal() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-1.5 md:col-span-1">
-                  <Label>Description (optional)</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">Description</Label>
                   <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Consulting Fee" />
                 </div>
               </div>
-              <div className="mt-4 flex justify-end">
-                <Button onClick={addTransaction} className="gap-2">
-                  <Banknote className="size-4" /> Add Transaction
+
+              <div className="mt-4 flex flex-wrap items-center gap-2 relative">
+                <Button onClick={() => addTransaction()} className="gap-2 bg-navy hover:bg-navy/90 text-navy-foreground">
+                  <Banknote className="size-4" /> Post Transaction
+                </Button>
+                <div className="h-6 w-px bg-border mx-1" />
+                <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Quick triggers</span>
+                <Button size="sm" variant="outline" onClick={() => addTransaction({ amount: 6000, type: "Cash Deposit" })}>
+                  + $6k Cash
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => addTransaction({ amount: 25000, type: "Wire Transfer", description: "Offshore wire" })}>
+                  + $25k Wire
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => addTransaction({ amount: 50000, type: "Incoming Transfer", description: "Property purchase settlement" })}>
+                  + $50k Property
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+          </section>
 
-        {/* Case timeline */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-2">
-              <FileWarning className="size-4" /> AML Case File Timeline — {activeCustomer?.name}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2 flex-wrap">
+          {/* CASE TIMELINE */}
+          <section className="executive-card p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <FileWarning className="size-4 text-primary" />
+                <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-muted-foreground">AML Case File Timeline</div>
+                <span className="text-sm font-semibold text-foreground">— {activeCustomer?.name}</span>
+              </div>
+              {activeCaseEvents.length > 0 && (
+                <Badge variant="outline" className="alert-glow-red font-semibold">
+                  {activeCaseEvents.length} stage{activeCaseEvents.length > 1 ? "s" : ""} triggered
+                </Badge>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap">
               {stageOrder.map((stage, idx) => {
                 const triggered = activeCaseEvents.find((e) => e.stage === stage);
-                const color =
-                  stage === "PLACEMENT" ? "bg-yellow-500" :
-                  stage === "LAYERING" ? "bg-orange-500" : "bg-red-600";
+                const glow = stage === "PLACEMENT" ? "alert-glow-gold" : stage === "LAYERING" ? "alert-glow-amber" : "alert-glow-red";
                 return (
-                  <div key={stage} className="flex items-center gap-2">
-                    <div className={`rounded-md px-3 py-2 text-xs font-semibold text-white ${triggered ? color : "bg-muted text-muted-foreground"}`}>
-                      {triggered ? "🚨 " : ""}{stage}
-                      {triggered && <div className="text-[10px] font-normal opacity-90">{new Date(triggered.timestamp).toLocaleTimeString()}</div>}
+                  <div key={stage} className="flex items-center gap-3">
+                    <div className={`rounded-xl px-4 py-3 min-w-[160px] transition-all ${triggered ? glow : "bg-muted/40 border border-dashed border-border text-muted-foreground"}`}>
+                      <div className="flex items-center gap-2">
+                        {triggered ? <AlertTriangle className="size-4" /> : <Circle className="size-4" />}
+                        <span className="text-xs font-bold tracking-wider">{stage}</span>
+                      </div>
+                      <div className="text-[10px] mt-1 font-mono opacity-80">
+                        {triggered ? new Date(triggered.timestamp).toLocaleTimeString() : "awaiting trigger"}
+                      </div>
                     </div>
-                    {idx < stageOrder.length - 1 && <span className="text-muted-foreground">➡️</span>}
+                    {idx < stageOrder.length - 1 && <ArrowRight className="size-4 text-muted-foreground" />}
                   </div>
                 );
               })}
-              {activeCaseEvents.length === 0 && <span className="text-sm text-muted-foreground">No alerts triggered for this customer.</span>}
             </div>
-          </CardContent>
-        </Card>
+          </section>
 
-        {/* Ledger */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Transaction Ledger — {activeCustomer?.name} ({activeTxs.length})
-            </CardTitle>
-            <Button variant="outline" size="sm" onClick={() => openSTR()} disabled={!activeCustomer}>
-              File STR/SAR
-            </Button>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Transaction ID</TableHead>
-                  <TableHead>Timestamp</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Country</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Alert</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {activeTxs.length === 0 && (
-                  <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">No transactions yet for this customer.</TableCell></TableRow>
-                )}
-                {activeTxs.map((tx) => (
-                  <TableRow key={tx.id} className={tx.alertStage ? "bg-destructive/5" : ""}>
-                    <TableCell className="font-mono text-xs">{tx.id}</TableCell>
-                    <TableCell className="text-xs">{new Date(tx.timestamp).toLocaleString()}</TableCell>
-                    <TableCell>{tx.customerName}</TableCell>
-                    <TableCell>{tx.customerCountry}</TableCell>
-                    <TableCell className="text-right font-medium">{fmtMoney(tx.amount)}</TableCell>
-                    <TableCell>{tx.type}</TableCell>
-                    <TableCell>
-                      <Badge variant={tx.status === "Flagged" ? "destructive" : tx.status === "Pending" ? "secondary" : "default"}>
-                        {tx.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {tx.alertStage ? (
-                        <Badge variant="destructive" className="gap-1">
-                          <AlertTriangle className="size-3" /> {tx.alertStage}
-                        </Badge>
-                      ) : <span className="text-xs text-muted-foreground">—</span>}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {tx.alertStage && (
-                        <div className="flex gap-1 justify-end">
-                          <Button size="sm" variant="outline" onClick={() => openInvestigate(tx)} className="gap-1 h-7">
-                            <ExternalLink className="size-3" /> Investigate
-                          </Button>
-                          <Button size="sm" variant="destructive" onClick={() => openSTR(tx)} className="h-7">
-                            File STR
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
+          {/* LEDGER — terminal style */}
+          <section className="executive-card overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b border-border bg-slate-panel/60">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-muted-foreground">Transaction Ledger</div>
+                <div className="text-sm font-semibold mt-0.5">{activeCustomer?.name} · {activeTxs.length} records</div>
+              </div>
+              <Button variant="default" size="sm" onClick={() => openSTR()} disabled={!activeCustomer} className="gap-2 bg-navy hover:bg-navy/90 text-navy-foreground">
+                <ShieldAlert className="size-4" /> File STR / SAR
+              </Button>
+            </div>
+            <div className="overflow-x-auto terminal-table">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-navy/[0.03] hover:bg-navy/[0.03] border-b-2 border-border">
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">TX ID</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Timestamp</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Customer</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Country</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold text-right">Amount</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Type</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Status</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Alert</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+                </TableHeader>
+                <TableBody>
+                  {activeTxs.length === 0 && (
+                    <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-10 text-sm">
+                      No transactions yet — use the Simulation Command Center to post one.
+                    </TableCell></TableRow>
+                  )}
+                  {activeTxs.map((tx) => (
+                    <TableRow key={tx.id} className={`group transition-colors ${tx.alertStage ? "bg-red-alert/[0.04] hover:bg-red-alert/[0.08]" : "hover:bg-secondary/60"}`}>
+                      <TableCell className="font-mono text-[11px]">{tx.id}</TableCell>
+                      <TableCell className="font-mono text-[11px] text-muted-foreground">{new Date(tx.timestamp).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm font-medium">{tx.customerName}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{tx.customerCountry}</TableCell>
+                      <TableCell className="text-right font-mono font-semibold tabular-nums">{fmtMoney(tx.amount)}</TableCell>
+                      <TableCell className="text-xs">{tx.type}</TableCell>
+                      <TableCell><StatusBadge status={tx.status} /></TableCell>
+                      <TableCell>
+                        {tx.alertStage ? (
+                          <Badge variant="outline" className={`gap-1 font-bold tracking-wider ${tx.alertStage === "PLACEMENT" ? "alert-glow-gold" : tx.alertStage === "LAYERING" ? "alert-glow-amber" : "alert-glow-red"}`}>
+                            <AlertTriangle className="size-3" /> {tx.alertStage}
+                          </Badge>
+                        ) : <span className="text-xs text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {tx.alertStage && (
+                          <div className="flex gap-1.5 justify-end">
+                            <Button size="sm" variant="outline" onClick={() => openInvestigate(tx)} className="gap-1 h-7 text-[11px]">
+                              <ExternalLink className="size-3" /> Investigate
+                            </Button>
+                            <Button size="sm" onClick={() => openSTR(tx)} className="h-7 text-[11px] gap-1 bg-red-alert hover:bg-red-alert/90 text-white">
+                              <ShieldAlert className="size-3" /> File STR
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </section>
 
-        {/* Global ledger */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Unified Bank-Wide Ledger ({transactions.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Country</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {transactions.length === 0 && (
-                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">No bank-wide transactions yet.</TableCell></TableRow>
-                )}
-                {transactions.slice().reverse().map((tx) => (
-                  <TableRow key={tx.id}>
-                    <TableCell className="font-mono text-xs">{tx.id}</TableCell>
-                    <TableCell>{tx.customerName}</TableCell>
-                    <TableCell>{tx.customerCountry}</TableCell>
-                    <TableCell className="text-right">{fmtMoney(tx.amount)}</TableCell>
-                    <TableCell>{tx.type}</TableCell>
-                    <TableCell>
-                      <Badge variant={tx.status === "Flagged" ? "destructive" : tx.status === "Pending" ? "secondary" : "default"}>{tx.status}</Badge>
-                    </TableCell>
+          {/* GLOBAL LEDGER */}
+          <section className="executive-card overflow-hidden">
+            <div className="p-5 border-b border-border bg-slate-panel/60">
+              <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-muted-foreground">Unified Bank-Wide Ledger</div>
+              <div className="text-sm font-semibold mt-0.5">{transactions.length} total records across institution</div>
+            </div>
+            <div className="overflow-x-auto terminal-table">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-navy/[0.03] hover:bg-navy/[0.03] border-b-2 border-border">
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">ID</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Customer</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Country</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold text-right">Amount</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Type</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-semibold">Status</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </main>
+                </TableHeader>
+                <TableBody>
+                  {transactions.length === 0 && (
+                    <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8 text-sm">No bank-wide transactions yet.</TableCell></TableRow>
+                  )}
+                  {transactions.slice().reverse().map((tx) => (
+                    <TableRow key={tx.id} className="hover:bg-secondary/60">
+                      <TableCell className="font-mono text-[11px]">{tx.id}</TableCell>
+                      <TableCell className="text-sm">{tx.customerName}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{tx.customerCountry}</TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">{fmtMoney(tx.amount)}</TableCell>
+                      <TableCell className="text-xs">{tx.type}</TableCell>
+                      <TableCell><StatusBadge status={tx.status} /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </section>
+        </main>
+      </div>
 
       <STRDialog
         open={strOpen}
@@ -520,6 +633,49 @@ function Portal() {
           setCustomers((prev) => prev.map((c) => c.id === customerId ? { ...c, locked: true } : c));
         }}
       />
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex justify-between items-center text-sm">
+      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span>{value}</span>
+    </div>
+  );
+}
+
+function RiskBadge({ risk }: { risk: Customer["riskRating"] }) {
+  if (risk === "High") return <Badge variant="outline" className="alert-glow-red font-semibold">HIGH</Badge>;
+  if (risk === "Medium") return <Badge variant="outline" className="alert-glow-amber font-semibold">MEDIUM</Badge>;
+  return <Badge variant="outline" className="border-emerald-ok/40 text-emerald-ok bg-emerald-ok/5 font-semibold">LOW</Badge>;
+}
+
+function StatusBadge({ status }: { status: TxStatus }) {
+  if (status === "Flagged") return <Badge variant="outline" className="alert-glow-red gap-1 font-semibold text-[10px] tracking-wider">FLAGGED</Badge>;
+  if (status === "Pending") return <Badge variant="outline" className="alert-glow-amber font-semibold text-[10px] tracking-wider">PENDING</Badge>;
+  return <Badge variant="outline" className="border-emerald-ok/40 text-emerald-ok bg-emerald-ok/5 font-semibold text-[10px] tracking-wider">COMPLETED</Badge>;
+}
+
+function KpiCard({
+  label, value, icon: Icon, accent,
+}: { label: string; value: string; icon: any; accent: "navy" | "red" | "amber" | "gold" }) {
+  const accentClass =
+    accent === "red" ? "from-red-alert/20 to-transparent text-red-alert" :
+    accent === "amber" ? "from-amber-alert/20 to-transparent text-amber-alert" :
+    accent === "gold" ? "from-gold/20 to-transparent text-gold" :
+    "from-primary/20 to-transparent text-primary";
+  return (
+    <div className="executive-card p-5 relative overflow-hidden group">
+      <div className={`absolute -top-10 -right-10 size-32 rounded-full bg-gradient-to-br ${accentClass} blur-2xl opacity-60 group-hover:opacity-100 transition`} />
+      <div className="relative">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-[0.18em] font-semibold text-muted-foreground">{label}</span>
+          <Icon className="size-4 text-muted-foreground" />
+        </div>
+        <div className="mt-3 text-2xl font-bold tracking-tight font-mono tabular-nums">{value}</div>
+      </div>
     </div>
   );
 }
@@ -534,6 +690,9 @@ function STRDialog({
 }) {
   const [typology, setTypology] = useState("Structuring");
   const [narrative, setNarrative] = useState("");
+  const [whoWhat, setWhoWhat] = useState("");
+  const [whenWhere, setWhenWhere] = useState("");
+  const [step, setStep] = useState(1);
   const [submitted, setSubmitted] = useState(false);
   const customer = context?.customer;
   const tx = context?.tx;
@@ -542,9 +701,14 @@ function STRDialog({
     if (open) {
       setSubmitted(false);
       setNarrative("");
+      setWhoWhat("");
+      setWhenWhere("");
+      setStep(1);
       setTypology(tx?.alertStage === "LAYERING" ? "Money Laundering" : tx?.alertStage === "INTEGRATION" ? "Money Laundering" : "Structuring");
     }
   }, [open, tx]);
+
+  const fullNarrative = [whoWhat, whenWhere, narrative].filter(Boolean).join("\n\n");
 
   function buildPDF() {
     const doc = new jsPDF();
@@ -596,7 +760,7 @@ function STRDialog({
     doc.setFont("helvetica", "bold"); doc.setFontSize(12);
     doc.text("Narrative (Who / What / When / Where / Why)", 15, y); y += 7;
     doc.setFont("helvetica", "normal"); doc.setFontSize(10);
-    const wrapped = doc.splitTextToSize(narrative || "(no narrative provided)", 180);
+    const wrapped = doc.splitTextToSize(fullNarrative || "(no narrative provided)", 180);
     doc.text(wrapped, 15, y);
     y += wrapped.length * 5 + 8;
 
@@ -609,90 +773,197 @@ function STRDialog({
 
   function submit() {
     if (!customer) return;
-    if (!narrative.trim()) return toast.error("Narrative is required");
+    if (!narrative.trim() && !whoWhat.trim()) return toast.error("Narrative is required");
     setSubmitted(true);
     onSubmitted(customer.id);
     toast.success("STR/SAR submitted to FIU", { description: `Account ${customer.accountNumber} locked.` });
   }
 
+  const steps = [
+    { n: 1, label: "Filer & Suspect" },
+    { n: 2, label: "Activity" },
+    { n: 3, label: "Narrative" },
+  ];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="size-5 text-destructive" />
-            Suspicious Transaction Report (STR / SAR)
-          </DialogTitle>
-          <DialogDescription>
-            FinCEN-aligned filing for the Financial Intelligence Unit (FIU).
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div className="rounded-md border bg-muted/40 p-3 text-sm space-y-1">
-            <div className="font-semibold">Filer Information</div>
-            <div className="text-muted-foreground">CitiMock Compliance Unit • Institutional AML Division</div>
+      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0 gap-0">
+        {/* Gov-style header */}
+        <div className="bg-navy text-navy-foreground p-6 rounded-t-lg">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-md bg-navy-foreground/10 border border-navy-foreground/20 flex items-center justify-center">
+              <ShieldAlert className="size-5" />
+            </div>
+            <div>
+              <DialogHeader className="space-y-0">
+                <DialogTitle className="text-base font-semibold tracking-tight text-navy-foreground">
+                  Suspicious Transaction Report · STR / SAR
+                </DialogTitle>
+                <DialogDescription className="text-[11px] text-navy-foreground/70 uppercase tracking-[0.18em] mt-1">
+                  FinCEN-Aligned Filing · Financial Intelligence Unit
+                </DialogDescription>
+              </DialogHeader>
+            </div>
+            <Badge variant="outline" className="ml-auto font-mono text-[10px] border-navy-foreground/30 text-navy-foreground bg-navy-foreground/10">
+              FORM SAR-112
+            </Badge>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div><Label className="text-xs">Customer Name</Label><div className="mt-1 rounded-md border px-3 py-2 bg-background">{customer?.name || "—"}</div></div>
-            <div><Label className="text-xs">Account Number</Label><div className="mt-1 rounded-md border px-3 py-2 bg-background font-mono">{customer?.accountNumber || "—"}</div></div>
-            <div><Label className="text-xs">Country</Label><div className="mt-1 rounded-md border px-3 py-2 bg-background">{customer?.country || "—"}</div></div>
-            <div><Label className="text-xs">Risk Rating</Label><div className="mt-1 rounded-md border px-3 py-2 bg-background">{customer?.riskRating || "—"}</div></div>
+          {/* Stepper */}
+          <div className="flex items-center gap-2 mt-5">
+            {steps.map((s, i) => {
+              const active = step === s.n;
+              const done = step > s.n;
+              return (
+                <div key={s.n} className="flex items-center gap-2 flex-1">
+                  <div className={`size-7 rounded-full flex items-center justify-center text-xs font-bold border transition-all ${
+                    done ? "bg-emerald-ok text-white border-emerald-ok" :
+                    active ? "bg-navy-foreground text-navy border-navy-foreground" :
+                    "bg-transparent text-navy-foreground/50 border-navy-foreground/30"
+                  }`}>
+                    {done ? <CheckCircle2 className="size-4" /> : s.n}
+                  </div>
+                  <div className={`text-[11px] uppercase tracking-wider font-semibold ${active ? "text-navy-foreground" : "text-navy-foreground/50"}`}>
+                    {s.label}
+                  </div>
+                  {i < steps.length - 1 && <div className="flex-1 h-px bg-navy-foreground/20 mx-1" />}
+                </div>
+              );
+            })}
           </div>
+        </div>
 
-          <div>
-            <Label>Typology</Label>
-            <Select value={typology} onValueChange={setTypology}>
-              <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Structuring">Structuring</SelectItem>
-                <SelectItem value="Money Laundering">Money Laundering</SelectItem>
-                <SelectItem value="Terrorist Financing">Terrorist Financing</SelectItem>
-                <SelectItem value="Fraud">Fraud</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="p-6 space-y-5">
+          {step === 1 && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-200">
+              <FieldGroup title="Filer Information">
+                <div className="grid grid-cols-2 gap-3">
+                  <ReadField label="Filer" value="CitiMock Compliance Unit" />
+                  <ReadField label="Division" value="Institutional AML" />
+                </div>
+              </FieldGroup>
+              <FieldGroup title="Suspect / Subject">
+                <div className="grid grid-cols-2 gap-3">
+                  <ReadField label="Customer Name" value={customer?.name || "—"} />
+                  <ReadField label="Account Number" value={customer?.accountNumber || "—"} mono />
+                  <ReadField label="Country" value={customer?.country || "—"} />
+                  <ReadField label="Risk Rating" value={customer?.riskRating || "—"} />
+                </div>
+              </FieldGroup>
+            </div>
+          )}
 
-          <div>
-            <Label>Narrative — Who, What, When, Where, Why</Label>
-            <Textarea
-              className="mt-1.5 min-h-[140px]"
-              value={narrative}
-              onChange={(e) => setNarrative(e.target.value)}
-              placeholder="Describe the suspicious behavior in detail, including parties involved, dates, amounts, jurisdictions, and reason for suspicion..."
-            />
-          </div>
+          {step === 2 && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-200">
+              <FieldGroup title="Suspicious Activity">
+                <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">Typology</Label>
+                <Select value={typology} onValueChange={setTypology}>
+                  <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Structuring">Structuring</SelectItem>
+                    <SelectItem value="Money Laundering">Money Laundering</SelectItem>
+                    <SelectItem value="Terrorist Financing">Terrorist Financing</SelectItem>
+                    <SelectItem value="Fraud">Fraud</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FieldGroup>
+              {tx && (
+                <FieldGroup title="Triggering Transaction">
+                  <div className="rounded-lg alert-glow-red p-4 text-xs space-y-2 font-mono">
+                    <div className="flex justify-between"><span className="opacity-70">TX ID</span><span className="font-bold">{tx.id}</span></div>
+                    <div className="flex justify-between"><span className="opacity-70">Type</span><span>{tx.type}</span></div>
+                    <div className="flex justify-between"><span className="opacity-70">Amount</span><span className="font-bold">{fmtMoney(tx.amount)}</span></div>
+                    <div className="flex justify-between"><span className="opacity-70">Stage</span><span className="font-bold tracking-wider">{tx.alertStage}</span></div>
+                  </div>
+                </FieldGroup>
+              )}
+            </div>
+          )}
 
-          {tx && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs space-y-1">
-              <div className="font-semibold text-destructive">Triggering Transaction</div>
-              <div>{tx.id} • {tx.type} • {fmtMoney(tx.amount)} • Stage: {tx.alertStage}</div>
+          {step === 3 && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-200">
+              <FieldGroup title="Narrative — Who / What">
+                <Textarea
+                  className="min-h-[80px]"
+                  value={whoWhat}
+                  onChange={(e) => setWhoWhat(e.target.value)}
+                  placeholder="Identify the subject(s) involved and describe the suspicious activity..."
+                />
+              </FieldGroup>
+              <FieldGroup title="Narrative — When / Where">
+                <Textarea
+                  className="min-h-[80px]"
+                  value={whenWhere}
+                  onChange={(e) => setWhenWhere(e.target.value)}
+                  placeholder="Dates, jurisdictions, branches, channels involved..."
+                />
+              </FieldGroup>
+              <FieldGroup title="Narrative — Why (Reason for Suspicion)">
+                <Textarea
+                  className="min-h-[120px]"
+                  value={narrative}
+                  onChange={(e) => setNarrative(e.target.value)}
+                  placeholder="Articulate the reason for suspicion — red flags, deviation from KYC profile, typology indicators..."
+                />
+              </FieldGroup>
             </div>
           )}
 
           {submitted && (
-            <div className="rounded-md border border-green-600/40 bg-green-600/10 p-3 text-sm text-green-700 dark:text-green-400">
-              ✅ Report submitted to FIU. Account has been locked. You may now download the official PDF.
+            <div className="rounded-lg border border-emerald-ok/40 bg-emerald-ok/5 p-4 text-sm text-emerald-ok flex items-center gap-3">
+              <CheckCircle2 className="size-5 shrink-0" />
+              <div>
+                <div className="font-semibold">Report submitted to FIU.</div>
+                <div className="text-xs opacity-90">Account locked. Download the official PDF below.</div>
+              </div>
             </div>
           )}
         </div>
 
-        <Separator />
-
-        <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
-          {!submitted ? (
-            <Button variant="destructive" onClick={submit} className="gap-2">
-              <Lock className="size-4" /> Submit Report to FIU
-            </Button>
-          ) : (
-            <Button onClick={buildPDF} className="gap-2">
-              <Download className="size-4" /> Download SAR PDF
-            </Button>
-          )}
+        <DialogFooter className="px-6 py-4 bg-slate-panel/60 border-t border-border gap-2 sm:justify-between rounded-b-lg">
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+            {step > 1 && !submitted && (
+              <Button variant="ghost" onClick={() => setStep((s) => s - 1)}>Back</Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {step < 3 && !submitted && (
+              <Button onClick={() => setStep((s) => s + 1)} className="gap-2 bg-navy hover:bg-navy/90 text-navy-foreground">
+                Next <ArrowRight className="size-4" />
+              </Button>
+            )}
+            {step === 3 && !submitted && (
+              <Button onClick={submit} className="gap-2 bg-red-alert hover:bg-red-alert/90 text-white">
+                <Lock className="size-4" /> Submit to FIU
+              </Button>
+            )}
+            {submitted && (
+              <Button onClick={buildPDF} className="gap-2 bg-navy hover:bg-navy/90 text-navy-foreground">
+                <Download className="size-4" /> Download SAR PDF
+              </Button>
+            )}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function FieldGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border bg-slate-panel/40 p-4">
+      <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-muted-foreground mb-3">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function ReadField({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</Label>
+      <div className={`mt-1 rounded-md border border-border px-3 py-2 bg-background text-sm ${mono ? "font-mono" : ""}`}>{value}</div>
+    </div>
   );
 }
