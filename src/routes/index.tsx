@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import jsPDF from "jspdf";
 import * as XLSX from "xlsx";
@@ -183,6 +183,9 @@ const SEED_CUSTOMERS: Customer[] = ([
 
 function Portal() {
   const [customers, setCustomers] = useState<Customer[]>(SEED_CUSTOMERS);
+  const complianceFlagsRef = useRef<Record<string, ComplianceFlags>>(
+    Object.fromEntries(SEED_CUSTOMERS.map((customer) => [customer.id, customer.complianceFlags])),
+  );
   const [activeCustomerId, setActiveCustomerId] = useState<string>("C-001");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [caseEvents, setCaseEvents] = useState<CaseEvent[]>([]);
