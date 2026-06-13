@@ -404,6 +404,15 @@ function Portal() {
     toast.info(`Account ${dormant ? "marked Dormant" : "reactivated to Active"}`);
   }
 
+  function resetComplianceFlags(customerId: string) {
+    setCustomers((prev) =>
+      prev.map((c) =>
+        c.id === customerId ? { ...c, complianceFlags: createComplianceFlags() } : c,
+      ),
+    );
+    toast.info("PLI session flags reset by analyst");
+  }
+
   function openInvestigate(tx: Transaction) {
     const customer = customers.find((c) => c.id === tx.customerId);
     if (!customer) return;
@@ -714,15 +723,24 @@ function Portal() {
 
         {/* Case timeline */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-2">
               <FileWarning className="size-4" /> AML Case File Timeline — {activeCustomer?.name}
             </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => activeCustomer && resetComplianceFlags(activeCustomer.id)}
+              disabled={!activeCustomer || !flagsChanged(activeComplianceFlags, createComplianceFlags())}
+            >
+              Reset PLI Flags
+            </Button>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 flex-wrap">
               {stageOrder.map((stage, idx) => {
-                const triggered = activeCaseEvents.find((e) => e.stage === stage);
+                const triggered = stageIsTriggered(activeComplianceFlags, stage);
+                const event = activeCaseEvents.find((e) => e.stage === stage);
                 const color =
                   stage === "PLACEMENT" ? "bg-yellow-500" :
                   stage === "LAYERING" ? "bg-orange-500" : "bg-red-600";
@@ -730,13 +748,13 @@ function Portal() {
                   <div key={stage} className="flex items-center gap-2">
                     <div className={`rounded-md px-3 py-2 text-xs font-semibold text-white ${triggered ? color : "bg-muted text-muted-foreground"}`}>
                       {triggered ? "🚨 " : ""}{stage}
-                      {triggered && <div className="text-[10px] font-normal opacity-90">{new Date(triggered.timestamp).toLocaleTimeString()}</div>}
+                      {triggered && event && <div className="text-[10px] font-normal opacity-90">{new Date(event.timestamp).toLocaleTimeString()}</div>}
                     </div>
                     {idx < stageOrder.length - 1 && <span className="text-muted-foreground">➡️</span>}
                   </div>
                 );
               })}
-              {activeCaseEvents.length === 0 && <span className="text-sm text-muted-foreground">No alerts triggered for this customer.</span>}
+              {!flagsChanged(activeComplianceFlags, createComplianceFlags()) && <span className="text-sm text-muted-foreground">No active PLI flags for this customer.</span>}
             </div>
           </CardContent>
         </Card>
