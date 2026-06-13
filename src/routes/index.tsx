@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import jsPDF from "jspdf";
 import * as XLSX from "xlsx";
@@ -58,6 +58,12 @@ type AlertStage = "PLACEMENT" | "LAYERING" | "INTEGRATION";
 type AccountStatus = "Active" | "Dormant";
 type RiskRating = "Low" | "Medium" | "High";
 
+interface ComplianceFlags {
+  placementTriggered: boolean;
+  layeringTriggered: boolean;
+  integrationTriggered: boolean;
+}
+
 interface Customer {
   id: string;
   name: string;
@@ -66,6 +72,7 @@ interface Customer {
   riskRating: RiskRating;
   locked: boolean;
   status: AccountStatus;
+  complianceFlags: ComplianceFlags;
 }
 
 interface Transaction {
@@ -118,6 +125,36 @@ const TX_FLOW: Record<TxType, "DEBIT" | "CREDIT"> = {
   "Interbank Transfer": "DEBIT",
 };
 
+const TRANSFER_TYPES: TxType[] = ["Wire Transfer", "Intrabank Transfer", "Interbank Transfer"];
+
+const STAGE_MESSAGES: Record<AlertStage, string> = {
+  PLACEMENT: "🚨 PLACEMENT: Cumulative cash deposits reached the structuring threshold",
+  LAYERING: "🚨 LAYERING: Outbound transfer moved 70%+ of current running balance",
+  INTEGRATION: "🚨 INTEGRATION: Business-purpose incoming credit after placement and layering",
+};
+
+function createComplianceFlags(): ComplianceFlags {
+  return {
+    placementTriggered: false,
+    layeringTriggered: false,
+    integrationTriggered: false,
+  };
+}
+
+function flagsChanged(a: ComplianceFlags, b: ComplianceFlags) {
+  return (
+    a.placementTriggered !== b.placementTriggered ||
+    a.layeringTriggered !== b.layeringTriggered ||
+    a.integrationTriggered !== b.integrationTriggered
+  );
+}
+
+function stageIsTriggered(flags: ComplianceFlags, stage: AlertStage) {
+  if (stage === "PLACEMENT") return flags.placementTriggered;
+  if (stage === "LAYERING") return flags.layeringTriggered;
+  return flags.integrationTriggered;
+}
+
 function uid(prefix = "") {
   return prefix + Math.random().toString(36).slice(2, 10).toUpperCase();
 }
@@ -126,7 +163,7 @@ function fmtMoney(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 }
 
-const SEED_CUSTOMERS: Customer[] = [
+const SEED_CUSTOMERS: Customer[] = ([
   { id: "C-001", name: "Sarah Chen", country: "Singapore", accountNumber: "CTM-1000-2847", riskRating: "Low", locked: false, status: "Active" },
   { id: "C-002", name: "Marcus Reid", country: "United Kingdom", accountNumber: "CTM-1000-5519", riskRating: "Medium", locked: false, status: "Active" },
   { id: "C-003", name: "Olivia Hartmann", country: "Germany", accountNumber: "CTM-1000-7732", riskRating: "Low", locked: false, status: "Active" },
@@ -139,10 +176,16 @@ const SEED_CUSTOMERS: Customer[] = [
   { id: "C-010", name: "Yuki Tanaka", country: "Japan", accountNumber: "CTM-1001-5588", riskRating: "Low", locked: false, status: "Active" },
   { id: "C-011", name: "Elena Ricci", country: "Malta", accountNumber: "CTM-1001-6696", riskRating: "High", locked: false, status: "Dormant" },
   { id: "C-012", name: "Andre Nascimento", country: "Brazil", accountNumber: "CTM-1001-7704", riskRating: "Medium", locked: false, status: "Active" },
-];
+] satisfies Array<Omit<Customer, "complianceFlags">>).map((customer) => ({
+  ...customer,
+  complianceFlags: createComplianceFlags(),
+}));
 
 function Portal() {
   const [customers, setCustomers] = useState<Customer[]>(SEED_CUSTOMERS);
+  const complianceFlagsRef = useRef<Record<string, ComplianceFlags>>(
+    Object.fromEntries(SEED_CUSTOMERS.map((customer) => [customer.id, customer.complianceFlags])),
+  );
   const [activeCustomerId, setActiveCustomerId] = useState<string>("C-001");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [caseEvents, setCaseEvents] = useState<CaseEvent[]>([]);
@@ -182,7 +225,9 @@ function Portal() {
         riskRating: HIGH_RISK_COUNTRIES.includes(country || "") ? "High" : risk,
         locked: false,
         status: "Active",
+        complianceFlags: createComplianceFlags(),
       };
+      complianceFlagsRef.current[newC.id] = newC.complianceFlags;
       setActiveCustomerId(newC.id);
       toast.success(`KYC ingested: ${newC.name}`, {
         description: `Country: ${newC.country} • Risk: ${newC.riskRating}`,
@@ -211,54 +256,55 @@ function Portal() {
     return activeTxs[activeTxs.length - 1].runningBalance;
   }, [activeTxs]);
 
-  function isOffshore(country: string) {
-    return HIGH_RISK_COUNTRIES.includes(country);
-  }
-
   function evaluateAlerts(
     newTx: Transaction,
     allForCustomer: Transaction[],
     priorBalance: number,
-  ): AlertStage | undefined {
-    const customer = customers.find((c) => c.id === newTx.customerId);
-    if (!customer) return;
+    currentFlags: ComplianceFlags,
+  ): { nextFlags: ComplianceFlags; newlyTriggeredStages: AlertStage[] } {
+    const nextFlags = { ...currentFlags };
+    const newlyTriggeredStages: AlertStage[] = [];
 
-    const prior = allForCustomer.filter((t) => t.id !== newTx.id);
-    const priorStages = caseEvents
-      .filter((e) => e.customerId === newTx.customerId)
-      .map((e) => e.stage);
+    const cumulativeCash = allForCustomer
+      .filter((t) => t.type === "Cash Deposit")
+      .reduce((sum, t) => sum + t.amount, 0);
 
-    // INTEGRATION — dynamic: any inbound credit with business keywords after Layering
-    if (newTx.flow === "CREDIT" && priorStages.includes("LAYERING")) {
+    if (cumulativeCash >= 10000 && nextFlags.placementTriggered === false) {
+      nextFlags.placementTriggered = true;
+      newlyTriggeredStages.push("PLACEMENT");
+    }
+
+    const placementWasAlreadyTriggered = currentFlags.placementTriggered === true;
+    const layeringWasAlreadyTriggered = currentFlags.layeringTriggered === true;
+
+    if (
+      placementWasAlreadyTriggered &&
+      nextFlags.layeringTriggered === false &&
+      TRANSFER_TYPES.includes(newTx.type) &&
+      newTx.flow === "DEBIT" &&
+      priorBalance > 0 &&
+      newTx.amount / priorBalance >= 0.7
+    ) {
+      nextFlags.layeringTriggered = true;
+      newlyTriggeredStages.push("LAYERING");
+    }
+
+    if (
+      placementWasAlreadyTriggered &&
+      layeringWasAlreadyTriggered &&
+      nextFlags.integrationTriggered === false &&
+      newTx.flow === "CREDIT"
+    ) {
       const desc = (newTx.description || "").toLowerCase();
       const sender = (newTx.counterpartyName || "").toLowerCase();
-      const hay = desc + " " + sender;
-      if (INTEGRATION_KEYWORDS.some((k) => hay.includes(k))) {
-        return "INTEGRATION";
+      const haystack = `${desc} ${sender}`;
+      if (INTEGRATION_KEYWORDS.some((keyword) => haystack.includes(keyword))) {
+        nextFlags.integrationTriggered = true;
+        newlyTriggeredStages.push("INTEGRATION");
       }
     }
 
-    // LAYERING — dynamic: any outbound int'l/other-bank transfer >= 70% of accumulated balance
-    // to an offshore/high-risk jurisdiction, AFTER Placement is active
-    if (
-      priorStages.includes("PLACEMENT") &&
-      (newTx.type === "Wire Transfer" || newTx.type === "Interbank Transfer") &&
-      priorBalance > 0 &&
-      newTx.amount / priorBalance >= 0.7 &&
-      isOffshore(benefCountry || newTx.customerCountry)
-    ) {
-      return "LAYERING";
-    }
-
-    // PLACEMENT — cumulative cash deposits passing $10,000 (no individual size required)
-    if (newTx.type === "Cash Deposit") {
-      const cumulativeCash = [...prior, newTx]
-        .filter((t) => t.type === "Cash Deposit")
-        .reduce((s, t) => s + t.amount, 0);
-      if (cumulativeCash > 10000 && !priorStages.includes("PLACEMENT")) {
-        return "PLACEMENT";
-      }
-    }
+    return { nextFlags, newlyTriggeredStages };
   }
 
   function addTransaction() {
@@ -311,19 +357,39 @@ function Portal() {
 
     const updatedAll = [...transactions, tx];
     const customerTxs = updatedAll.filter((t) => t.customerId === activeCustomer.id);
-    const stage = evaluateAlerts(tx, customerTxs, priorBalance);
-    if (stage) {
-      tx.alertStage = stage;
+    const currentFlags = complianceFlagsRef.current[activeCustomer.id] ?? activeCustomer.complianceFlags;
+    const { nextFlags, newlyTriggeredStages } = evaluateAlerts(
+      tx,
+      customerTxs,
+      priorBalance,
+      currentFlags,
+    );
+
+    if (flagsChanged(currentFlags, nextFlags)) {
+      complianceFlagsRef.current[activeCustomer.id] = nextFlags;
+      setCustomers((prev) =>
+        prev.map((c) =>
+          c.id === activeCustomer.id ? { ...c, complianceFlags: nextFlags } : c,
+        ),
+      );
+    }
+
+    if (newlyTriggeredStages.length > 0) {
+      const finalStage = newlyTriggeredStages[newlyTriggeredStages.length - 1];
+      tx.alertStage = finalStage;
       tx.status = "Flagged";
-      const stageMsg: Record<AlertStage, string> = {
-        PLACEMENT: "🚨 PLACEMENT: Potential Structuring Detected",
-        LAYERING: "🚨 LAYERING: Rapid Layering / Blending via Offshore Wire",
-        INTEGRATION: "🚨 INTEGRATION: Funds Integrated into Clean Asset (Audit Required)",
-      };
-      toast.error(stageMsg[stage], { duration: 6000 });
+
+      newlyTriggeredStages.forEach((stage) => toast.error(STAGE_MESSAGES[stage], { duration: 6000 }));
       setCaseEvents((prev) => [
         ...prev,
-        { id: uid("E-"), customerId: activeCustomer.id, stage, message: stageMsg[stage], timestamp: tx.timestamp, txId: tx.id },
+        ...newlyTriggeredStages.map((stage) => ({
+          id: uid("E-"),
+          customerId: activeCustomer.id,
+          stage,
+          message: STAGE_MESSAGES[stage],
+          timestamp: tx.timestamp,
+          txId: tx.id,
+        })),
       ]);
     } else if (!tx.dormantReactivation) {
       toast.success("Transaction posted");
@@ -345,6 +411,17 @@ function Portal() {
       ),
     );
     toast.info(`Account ${dormant ? "marked Dormant" : "reactivated to Active"}`);
+  }
+
+  function resetComplianceFlags(customerId: string) {
+    const resetFlags = createComplianceFlags();
+    complianceFlagsRef.current[customerId] = resetFlags;
+    setCustomers((prev) =>
+      prev.map((c) =>
+        c.id === customerId ? { ...c, complianceFlags: resetFlags } : c,
+      ),
+    );
+    toast.info("PLI session flags reset by analyst");
   }
 
   function openInvestigate(tx: Transaction) {
@@ -374,6 +451,9 @@ function Portal() {
         "Risk Rating": c.riskRating,
         "Account Status": c.status,
         "Locked": c.locked ? "Yes" : "No",
+        "PLI Placement Triggered": c.complianceFlags.placementTriggered ? "Yes" : "No",
+        "PLI Layering Triggered": c.complianceFlags.layeringTriggered ? "Yes" : "No",
+        "PLI Integration Triggered": c.complianceFlags.integrationTriggered ? "Yes" : "No",
         "Transactions": ctx.length,
         "Current Balance (USD)": bal,
       };
@@ -424,6 +504,7 @@ function Portal() {
 
   const stageOrder: AlertStage[] = ["PLACEMENT", "LAYERING", "INTEGRATION"];
   const needsBenef = txType === "Intrabank Transfer" || txType === "Interbank Transfer" || txType === "Wire Transfer";
+  const activeComplianceFlags = activeCustomer?.complianceFlags ?? createComplianceFlags();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -653,15 +734,24 @@ function Portal() {
 
         {/* Case timeline */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-2">
               <FileWarning className="size-4" /> AML Case File Timeline — {activeCustomer?.name}
             </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => activeCustomer && resetComplianceFlags(activeCustomer.id)}
+              disabled={!activeCustomer || !flagsChanged(activeComplianceFlags, createComplianceFlags())}
+            >
+              Reset PLI Flags
+            </Button>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 flex-wrap">
               {stageOrder.map((stage, idx) => {
-                const triggered = activeCaseEvents.find((e) => e.stage === stage);
+                const triggered = stageIsTriggered(activeComplianceFlags, stage);
+                const event = activeCaseEvents.find((e) => e.stage === stage);
                 const color =
                   stage === "PLACEMENT" ? "bg-yellow-500" :
                   stage === "LAYERING" ? "bg-orange-500" : "bg-red-600";
@@ -669,13 +759,13 @@ function Portal() {
                   <div key={stage} className="flex items-center gap-2">
                     <div className={`rounded-md px-3 py-2 text-xs font-semibold text-white ${triggered ? color : "bg-muted text-muted-foreground"}`}>
                       {triggered ? "🚨 " : ""}{stage}
-                      {triggered && <div className="text-[10px] font-normal opacity-90">{new Date(triggered.timestamp).toLocaleTimeString()}</div>}
+                      {triggered && event && <div className="text-[10px] font-normal opacity-90">{new Date(event.timestamp).toLocaleTimeString()}</div>}
                     </div>
                     {idx < stageOrder.length - 1 && <span className="text-muted-foreground">➡️</span>}
                   </div>
                 );
               })}
-              {activeCaseEvents.length === 0 && <span className="text-sm text-muted-foreground">No alerts triggered for this customer.</span>}
+              {!flagsChanged(activeComplianceFlags, createComplianceFlags()) && <span className="text-sm text-muted-foreground">No active PLI flags for this customer.</span>}
             </div>
           </CardContent>
         </Card>
