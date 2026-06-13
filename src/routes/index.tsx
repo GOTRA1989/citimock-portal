@@ -431,6 +431,9 @@ function Portal() {
         "Risk Rating": c.riskRating,
         "Account Status": c.status,
         "Locked": c.locked ? "Yes" : "No",
+        "PLI Placement Triggered": c.complianceFlags.placementTriggered ? "Yes" : "No",
+        "PLI Layering Triggered": c.complianceFlags.layeringTriggered ? "Yes" : "No",
+        "PLI Integration Triggered": c.complianceFlags.integrationTriggered ? "Yes" : "No",
         "Transactions": ctx.length,
         "Current Balance (USD)": bal,
       };
@@ -481,6 +484,7 @@ function Portal() {
 
   const stageOrder: AlertStage[] = ["PLACEMENT", "LAYERING", "INTEGRATION"];
   const needsBenef = txType === "Intrabank Transfer" || txType === "Interbank Transfer" || txType === "Wire Transfer";
+  const activeComplianceFlags = activeCustomer?.complianceFlags ?? createComplianceFlags();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
