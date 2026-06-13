@@ -350,19 +350,37 @@ function Portal() {
 
     const updatedAll = [...transactions, tx];
     const customerTxs = updatedAll.filter((t) => t.customerId === activeCustomer.id);
-    const stage = evaluateAlerts(tx, customerTxs, priorBalance);
-    if (stage) {
-      tx.alertStage = stage;
+    const { nextFlags, newlyTriggeredStages } = evaluateAlerts(
+      tx,
+      customerTxs,
+      priorBalance,
+      activeCustomer.complianceFlags,
+    );
+
+    if (flagsChanged(activeCustomer.complianceFlags, nextFlags)) {
+      setCustomers((prev) =>
+        prev.map((c) =>
+          c.id === activeCustomer.id ? { ...c, complianceFlags: nextFlags } : c,
+        ),
+      );
+    }
+
+    if (newlyTriggeredStages.length > 0) {
+      const finalStage = newlyTriggeredStages[newlyTriggeredStages.length - 1];
+      tx.alertStage = finalStage;
       tx.status = "Flagged";
-      const stageMsg: Record<AlertStage, string> = {
-        PLACEMENT: "🚨 PLACEMENT: Potential Structuring Detected",
-        LAYERING: "🚨 LAYERING: Rapid Layering / Blending via Offshore Wire",
-        INTEGRATION: "🚨 INTEGRATION: Funds Integrated into Clean Asset (Audit Required)",
-      };
-      toast.error(stageMsg[stage], { duration: 6000 });
+
+      newlyTriggeredStages.forEach((stage) => toast.error(STAGE_MESSAGES[stage], { duration: 6000 }));
       setCaseEvents((prev) => [
         ...prev,
-        { id: uid("E-"), customerId: activeCustomer.id, stage, message: stageMsg[stage], timestamp: tx.timestamp, txId: tx.id },
+        ...newlyTriggeredStages.map((stage) => ({
+          id: uid("E-"),
+          customerId: activeCustomer.id,
+          stage,
+          message: STAGE_MESSAGES[stage],
+          timestamp: tx.timestamp,
+          txId: tx.id,
+        })),
       ]);
     } else if (!tx.dormantReactivation) {
       toast.success("Transaction posted");
