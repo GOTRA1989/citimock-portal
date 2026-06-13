@@ -222,6 +222,7 @@ function Portal() {
         riskRating: HIGH_RISK_COUNTRIES.includes(country || "") ? "High" : risk,
         locked: false,
         status: "Active",
+        complianceFlags: createComplianceFlags(),
       };
       setActiveCustomerId(newC.id);
       toast.success(`KYC ingested: ${newC.name}`, {
@@ -251,54 +252,52 @@ function Portal() {
     return activeTxs[activeTxs.length - 1].runningBalance;
   }, [activeTxs]);
 
-  function isOffshore(country: string) {
-    return HIGH_RISK_COUNTRIES.includes(country);
-  }
-
   function evaluateAlerts(
     newTx: Transaction,
     allForCustomer: Transaction[],
     priorBalance: number,
-  ): AlertStage | undefined {
-    const customer = customers.find((c) => c.id === newTx.customerId);
-    if (!customer) return;
+    currentFlags: ComplianceFlags,
+  ): { nextFlags: ComplianceFlags; newlyTriggeredStages: AlertStage[] } {
+    const nextFlags = { ...currentFlags };
+    const newlyTriggeredStages: AlertStage[] = [];
 
-    const prior = allForCustomer.filter((t) => t.id !== newTx.id);
-    const priorStages = caseEvents
-      .filter((e) => e.customerId === newTx.customerId)
-      .map((e) => e.stage);
+    const cumulativeCash = allForCustomer
+      .filter((t) => t.type === "Cash Deposit")
+      .reduce((sum, t) => sum + t.amount, 0);
 
-    // INTEGRATION — dynamic: any inbound credit with business keywords after Layering
-    if (newTx.flow === "CREDIT" && priorStages.includes("LAYERING")) {
+    if (cumulativeCash >= 10000 && nextFlags.placementTriggered === false) {
+      nextFlags.placementTriggered = true;
+      newlyTriggeredStages.push("PLACEMENT");
+    }
+
+    if (
+      nextFlags.placementTriggered === true &&
+      nextFlags.layeringTriggered === false &&
+      TRANSFER_TYPES.includes(newTx.type) &&
+      newTx.flow === "DEBIT" &&
+      priorBalance > 0 &&
+      newTx.amount / priorBalance >= 0.7
+    ) {
+      nextFlags.layeringTriggered = true;
+      newlyTriggeredStages.push("LAYERING");
+    }
+
+    if (
+      nextFlags.placementTriggered === true &&
+      nextFlags.layeringTriggered === true &&
+      nextFlags.integrationTriggered === false &&
+      newTx.flow === "CREDIT"
+    ) {
       const desc = (newTx.description || "").toLowerCase();
       const sender = (newTx.counterpartyName || "").toLowerCase();
-      const hay = desc + " " + sender;
-      if (INTEGRATION_KEYWORDS.some((k) => hay.includes(k))) {
-        return "INTEGRATION";
+      const haystack = `${desc} ${sender}`;
+      if (INTEGRATION_KEYWORDS.some((keyword) => haystack.includes(keyword))) {
+        nextFlags.integrationTriggered = true;
+        newlyTriggeredStages.push("INTEGRATION");
       }
     }
 
-    // LAYERING — dynamic: any outbound int'l/other-bank transfer >= 70% of accumulated balance
-    // to an offshore/high-risk jurisdiction, AFTER Placement is active
-    if (
-      priorStages.includes("PLACEMENT") &&
-      (newTx.type === "Wire Transfer" || newTx.type === "Interbank Transfer") &&
-      priorBalance > 0 &&
-      newTx.amount / priorBalance >= 0.7 &&
-      isOffshore(benefCountry || newTx.customerCountry)
-    ) {
-      return "LAYERING";
-    }
-
-    // PLACEMENT — cumulative cash deposits passing $10,000 (no individual size required)
-    if (newTx.type === "Cash Deposit") {
-      const cumulativeCash = [...prior, newTx]
-        .filter((t) => t.type === "Cash Deposit")
-        .reduce((s, t) => s + t.amount, 0);
-      if (cumulativeCash > 10000 && !priorStages.includes("PLACEMENT")) {
-        return "PLACEMENT";
-      }
-    }
+    return { nextFlags, newlyTriggeredStages };
   }
 
   function addTransaction() {
