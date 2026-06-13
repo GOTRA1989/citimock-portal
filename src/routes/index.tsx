@@ -270,8 +270,11 @@ function Portal() {
       newlyTriggeredStages.push("PLACEMENT");
     }
 
+    const placementWasAlreadyTriggered = currentFlags.placementTriggered === true;
+    const layeringWasAlreadyTriggered = currentFlags.layeringTriggered === true;
+
     if (
-      nextFlags.placementTriggered === true &&
+      placementWasAlreadyTriggered &&
       nextFlags.layeringTriggered === false &&
       TRANSFER_TYPES.includes(newTx.type) &&
       newTx.flow === "DEBIT" &&
@@ -283,8 +286,8 @@ function Portal() {
     }
 
     if (
-      nextFlags.placementTriggered === true &&
-      nextFlags.layeringTriggered === true &&
+      placementWasAlreadyTriggered &&
+      layeringWasAlreadyTriggered &&
       nextFlags.integrationTriggered === false &&
       newTx.flow === "CREDIT"
     ) {
