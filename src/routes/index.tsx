@@ -58,6 +58,12 @@ type AlertStage = "PLACEMENT" | "LAYERING" | "INTEGRATION";
 type AccountStatus = "Active" | "Dormant";
 type RiskRating = "Low" | "Medium" | "High";
 
+interface ComplianceFlags {
+  placementTriggered: boolean;
+  layeringTriggered: boolean;
+  integrationTriggered: boolean;
+}
+
 interface Customer {
   id: string;
   name: string;
@@ -66,6 +72,7 @@ interface Customer {
   riskRating: RiskRating;
   locked: boolean;
   status: AccountStatus;
+  complianceFlags: ComplianceFlags;
 }
 
 interface Transaction {
@@ -118,6 +125,36 @@ const TX_FLOW: Record<TxType, "DEBIT" | "CREDIT"> = {
   "Interbank Transfer": "DEBIT",
 };
 
+const TRANSFER_TYPES: TxType[] = ["Wire Transfer", "Intrabank Transfer", "Interbank Transfer"];
+
+const STAGE_MESSAGES: Record<AlertStage, string> = {
+  PLACEMENT: "🚨 PLACEMENT: Cumulative cash deposits reached the structuring threshold",
+  LAYERING: "🚨 LAYERING: Outbound transfer moved 70%+ of current running balance",
+  INTEGRATION: "🚨 INTEGRATION: Business-purpose incoming credit after placement and layering",
+};
+
+function createComplianceFlags(): ComplianceFlags {
+  return {
+    placementTriggered: false,
+    layeringTriggered: false,
+    integrationTriggered: false,
+  };
+}
+
+function flagsChanged(a: ComplianceFlags, b: ComplianceFlags) {
+  return (
+    a.placementTriggered !== b.placementTriggered ||
+    a.layeringTriggered !== b.layeringTriggered ||
+    a.integrationTriggered !== b.integrationTriggered
+  );
+}
+
+function stageIsTriggered(flags: ComplianceFlags, stage: AlertStage) {
+  if (stage === "PLACEMENT") return flags.placementTriggered;
+  if (stage === "LAYERING") return flags.layeringTriggered;
+  return flags.integrationTriggered;
+}
+
 function uid(prefix = "") {
   return prefix + Math.random().toString(36).slice(2, 10).toUpperCase();
 }
@@ -126,7 +163,7 @@ function fmtMoney(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 }
 
-const SEED_CUSTOMERS: Customer[] = [
+const SEED_CUSTOMERS: Customer[] = ([
   { id: "C-001", name: "Sarah Chen", country: "Singapore", accountNumber: "CTM-1000-2847", riskRating: "Low", locked: false, status: "Active" },
   { id: "C-002", name: "Marcus Reid", country: "United Kingdom", accountNumber: "CTM-1000-5519", riskRating: "Medium", locked: false, status: "Active" },
   { id: "C-003", name: "Olivia Hartmann", country: "Germany", accountNumber: "CTM-1000-7732", riskRating: "Low", locked: false, status: "Active" },
@@ -139,7 +176,10 @@ const SEED_CUSTOMERS: Customer[] = [
   { id: "C-010", name: "Yuki Tanaka", country: "Japan", accountNumber: "CTM-1001-5588", riskRating: "Low", locked: false, status: "Active" },
   { id: "C-011", name: "Elena Ricci", country: "Malta", accountNumber: "CTM-1001-6696", riskRating: "High", locked: false, status: "Dormant" },
   { id: "C-012", name: "Andre Nascimento", country: "Brazil", accountNumber: "CTM-1001-7704", riskRating: "Medium", locked: false, status: "Active" },
-];
+] satisfies Array<Omit<Customer, "complianceFlags">>).map((customer) => ({
+  ...customer,
+  complianceFlags: createComplianceFlags(),
+}));
 
 function Portal() {
   const [customers, setCustomers] = useState<Customer[]>(SEED_CUSTOMERS);
