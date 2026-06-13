@@ -227,6 +227,7 @@ function Portal() {
         status: "Active",
         complianceFlags: createComplianceFlags(),
       };
+      complianceFlagsRef.current[newC.id] = newC.complianceFlags;
       setActiveCustomerId(newC.id);
       toast.success(`KYC ingested: ${newC.name}`, {
         description: `Country: ${newC.country} • Risk: ${newC.riskRating}`,
@@ -356,14 +357,16 @@ function Portal() {
 
     const updatedAll = [...transactions, tx];
     const customerTxs = updatedAll.filter((t) => t.customerId === activeCustomer.id);
+    const currentFlags = complianceFlagsRef.current[activeCustomer.id] ?? activeCustomer.complianceFlags;
     const { nextFlags, newlyTriggeredStages } = evaluateAlerts(
       tx,
       customerTxs,
       priorBalance,
-      activeCustomer.complianceFlags,
+      currentFlags,
     );
 
-    if (flagsChanged(activeCustomer.complianceFlags, nextFlags)) {
+    if (flagsChanged(currentFlags, nextFlags)) {
+      complianceFlagsRef.current[activeCustomer.id] = nextFlags;
       setCustomers((prev) =>
         prev.map((c) =>
           c.id === activeCustomer.id ? { ...c, complianceFlags: nextFlags } : c,
@@ -411,9 +414,11 @@ function Portal() {
   }
 
   function resetComplianceFlags(customerId: string) {
+    const resetFlags = createComplianceFlags();
+    complianceFlagsRef.current[customerId] = resetFlags;
     setCustomers((prev) =>
       prev.map((c) =>
-        c.id === customerId ? { ...c, complianceFlags: createComplianceFlags() } : c,
+        c.id === customerId ? { ...c, complianceFlags: resetFlags } : c,
       ),
     );
     toast.info("PLI session flags reset by analyst");
